@@ -7,7 +7,7 @@ import PROMPT_ANTHROPIC from "./prompt/anthropic.txt"
 import PROMPT_DEFAULT from "./prompt/default.txt"
 import PROMPT_BEAST from "./prompt/beast.txt"
 import PROMPT_GEMINI from "./prompt/gemini.txt"
-import PROMPT_GPT from "./prompt/gpt.txt"
+import PROMPT_GPT_AUTO from "./prompt/gpt-auto.txt"
 import PROMPT_ASTRA from "./prompt/gpt-astra.txt"
 import PROMPT_KIMI from "./prompt/kimi.txt"
 import PROMPT_META from "./prompt/meta.txt"
@@ -37,7 +37,7 @@ export function provider(model: Provider.Model) {
     if (model.api.id.includes("codex")) {
       return [PROMPT_CODEX]
     }
-    return [PROMPT_GPT]
+    return [PROMPT_GPT_AUTO]
   }
   if (model.api.id.includes("gemini-")) return [PROMPT_GEMINI]
   if (model.api.id.includes("claude")) return [PROMPT_ANTHROPIC]
@@ -47,7 +47,14 @@ export function provider(model: Provider.Model) {
     ["kimi-for-coding", "moonshotai", "moonshotai-cn"].includes(model.providerID)
   )
     return [PROMPT_KIMI]
-  return [PROMPT_DEFAULT]
+  // All models use gpt-auto.txt as the system prompt (was default.txt for unmatched).
+  // default.txt targets interactive CLI Q&A ("minimize output", "only act when asked",
+  // "stop after each file"), which causes models to spin on meta-work instead of
+  // making progress on autonomous long-running tasks. gpt-auto.txt additionally
+  // strips the "Special user requests" (Q&A-oriented) and "Frontend tasks"
+  // (React-specific) sections from gpt.txt, which conflict with autonomous
+  // full-stack reconstruction work.
+  return [PROMPT_GPT_AUTO]
 }
 
 export interface Interface {
