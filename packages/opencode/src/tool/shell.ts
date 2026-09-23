@@ -548,13 +548,17 @@ export const ShellTool = Tool.define(
             timeout.pipe(Effect.map(() => ({ kind: "timeout" as const, code: null }))),
           ])
 
+          // kill 只发送一次，之后不再读取该进程的任何状态。命令经 agent-command
+          // 已 exec 成 agent(uid 2001)，而本进程是 agentctl(2000)，跨 uid kill 可能
+          // 失败；这里按"发过就算"处理——残留进程随容器/task 结束一并消失，不等待、
+          // 不探测、也不因失败而中断（原来用 orDie 会直接 die）。
           if (exit.kind === "abort") {
             aborted = true
-            yield* handle.kill({ forceKillAfter: "3 seconds" }).pipe(Effect.orDie)
+            yield* handle.kill({ forceKillAfter: "3 seconds" }).pipe(Effect.ignore)
           }
           if (exit.kind === "timeout") {
             expired = true
-            yield* handle.kill({ forceKillAfter: "3 seconds" }).pipe(Effect.orDie)
+            yield* handle.kill({ forceKillAfter: "3 seconds" }).pipe(Effect.ignore)
           }
 
           return exit.kind === "exit" ? exit.code : null
