@@ -344,7 +344,10 @@ export const ShellTool = Tool.define(
     const trunc = yield* Truncate.Service
     const plugin = yield* Plugin.Service
     const flags = yield* RuntimeFlags.Service
-    const defaultTimeoutMs = flags.bashDefaultTimeoutMs ?? 2 * 60 * 1000
+    // 与 devbox 侧 agent-command 的 600s 硬限制对齐。两层超时允许有时间差，但
+    // opencode 这边不能更早触发：agent-command 会把命令 exec 成 agent(uid 2001)，
+    // 而 opencode 以 agentctl(2000) 运行，跨 uid kill 会失败。
+    const defaultTimeoutMs = flags.bashDefaultTimeoutMs ?? 10 * 60 * 1000
 
     const cygpath = Effect.fn("ShellTool.cygpath")(function* (shell: string, text: string) {
       const lines = yield* spawner
