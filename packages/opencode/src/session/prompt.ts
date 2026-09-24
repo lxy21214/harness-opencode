@@ -83,8 +83,11 @@ const STRUCTURED_OUTPUT_SYSTEM_PROMPT = `IMPORTANT: The user has requested struc
 
 // 模型在一轮里没有调用任何工具时的收尾策略（对齐 mini-swe-agent 的 no-bash 语义）：
 // 第一次不调用工具时插入一条 user 消息请它确认是否已完成；连续两次仍然不调用工具
-// 就结束本轮 run。出现工具调用即重置连续计数；这里特意不设"累计次数"上限。
+// 就结束本轮 run。出现工具调用即重置连续计数；累计无工具调用的轮次
+// 超过 NO_TOOL_CALL_LIMIT_TOTAL 时也结束（防止模型在"确认完成"和"再调
+// 一次工具"之间无限摆动，重置连续计数导致永不退出）。
 const NO_TOOL_CALL_LIMIT_CONSECUTIVE = 2
+const NO_TOOL_CALL_LIMIT_TOTAL = 50
 const NO_TOOL_CALL_PROMPT = `如果确认完成任务请再次回复确认，并且不要再调用任何工具。`
 
 function mcpResourceBase64Size(value: string) {
@@ -1090,6 +1093,7 @@ const layer = Layer.effect(
         let structured: unknown
         let step = 0
         let consecutiveNoTool = 0
+        let totalNoTool = 0
         const session = yield* sessions.get(sessionID).pipe(Effect.orDie)
 
         while (true) {
@@ -1135,6 +1139,7 @@ const layer = Layer.effect(
             // 这一轮模型没有调用任何工具。不再直接结束：第一次时插入一条 user 消息请它
             // 明确确认（落库，作为下一轮的输入）；连续两次都不调用工具才结束本轮 run。
             consecutiveNoTool++
+            totalNoTool++
             if (consecutiveNoTool >= NO_TOOL_CALL_LIMIT_CONSECUTIVE) {
               yield* Effect.logInfo("exiting loop: consecutive turns without a tool call", {
                 "session.id": sessionID,
@@ -1142,9 +1147,17 @@ const layer = Layer.effect(
               })
               break
             }
+            if (totalNoTool >= NO_TOOL_CALL_LIMIT_TOTAL) {
+              yield* Effect.logInfo("exiting loop: total turns without a tool call", {
+                "session.id": sessionID,
+                total: totalNoTool,
+              })
+              break
+            }
             yield* Effect.logInfo("no tool call; asking the model to confirm completion", {
               "session.id": sessionID,
               consecutive: consecutiveNoTool,
+              total: totalNoTool,
             })
             yield* createUserMessage({
               sessionID,
