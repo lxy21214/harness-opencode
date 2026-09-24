@@ -657,25 +657,22 @@ const layer = Layer.effect(
             // Hard per-turn timeout: abandon a stalled turn after 600s and move
             // to the next turn instead of waiting forever on a broken SSE
             // stream (Bun reader.read() hangs on unclean connection close).
-            // The timeout is a fail, not an interrupt, so onInterrupt/halt
-            // cleanup does not fire and the loop simply continues.
+            // timeoutOrElse converts the interruption into a replacement
+            // effect, so onInterrupt/halt cleanup does not fire and the loop
+            // simply continues on the next turn.
             yield* stream.pipe(
               Stream.tap((event) => handleEvent(event)),
               Stream.takeUntil(() => ctx.needsCompaction),
               Stream.runDrain,
             ).pipe(
-              Effect.timeoutFail({
+              Effect.timeoutOrElse({
                 duration: 600_000,
-                onTimeout: () => new Error("TURN_STALLED"),
-              }),
-              Effect.catchIf(
-                (e) => e instanceof Error && e.message === "TURN_STALLED",
-                () =>
+                orElse: () =>
                   Effect.gen(function* () {
                     turnTimedOut = true
                     yield* Effect.logInfo("turn stalled for over 600s; abandoning this turn")
                   }),
-              ),
+              }),
             )
           }).pipe(
             Effect.onInterrupt(() =>
