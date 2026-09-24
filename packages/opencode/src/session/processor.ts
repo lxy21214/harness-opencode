@@ -27,7 +27,7 @@ import { Database } from "@opencode-ai/core/database/database"
 import { Usage, type LLMEvent } from "@opencode-ai/llm"
 
 const DOOM_LOOP_THRESHOLD = 3
-export type Result = "compact" | "stop" | "continue"
+export type Result = "compact" | "stop" | "continue" | "timeout"
 
 export interface Handle {
   readonly message: SessionV1.Assistant
@@ -647,16 +647,35 @@ const layer = Layer.effect(
         ctx.shouldBreak = (yield* config.get()).experimental?.continue_loop_on_deny !== true
 
         return yield* Effect.gen(function* () {
+          let turnTimedOut = false
           yield* Effect.gen(function* () {
             ctx.currentText = undefined
             ctx.reasoningMap = {}
             yield* status.set(ctx.sessionID, { type: "busy" })
             const stream = llm.stream(streamInput)
 
+            // Hard per-turn timeout: abandon a stalled turn after 600s and move
+            // to the next turn instead of waiting forever on a broken SSE
+            // stream (Bun reader.read() hangs on unclean connection close).
+            // The timeout is a fail, not an interrupt, so onInterrupt/halt
+            // cleanup does not fire and the loop simply continues.
             yield* stream.pipe(
               Stream.tap((event) => handleEvent(event)),
               Stream.takeUntil(() => ctx.needsCompaction),
               Stream.runDrain,
+            ).pipe(
+              Effect.timeoutFail({
+                duration: 600_000,
+                onTimeout: () => new Error("TURN_STALLED"),
+              }),
+              Effect.catchIf(
+                (e) => e instanceof Error && e.message === "TURN_STALLED",
+                () =>
+                  Effect.gen(function* () {
+                    turnTimedOut = true
+                    yield* Effect.logInfo("turn stalled for over 600s; abandoning this turn")
+                  }),
+              ),
             )
           }).pipe(
             Effect.onInterrupt(() =>
@@ -692,6 +711,7 @@ const layer = Layer.effect(
 
           if (ctx.needsCompaction) return "compact"
           if (ctx.blocked || ctx.assistantMessage.error) return "stop"
+          if (turnTimedOut) return "timeout"
           return "continue"
         })
       })

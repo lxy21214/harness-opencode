@@ -89,6 +89,7 @@ const STRUCTURED_OUTPUT_SYSTEM_PROMPT = `IMPORTANT: The user has requested struc
 const NO_TOOL_CALL_LIMIT_CONSECUTIVE = 2
 const NO_TOOL_CALL_LIMIT_TOTAL = 50
 const NO_TOOL_CALL_PROMPT = `如果确认完成任务请再次回复确认，并且不要再调用任何工具。`
+const TURN_TIMEOUT_PROMPT = `A command has not returned any output for over 10 minutes; it may still be running in the background. Please continue with the task.`
 
 function mcpResourceBase64Size(value: string) {
   const trimmed = value.replace(/\s/g, "")
@@ -1357,6 +1358,17 @@ const layer = Layer.effect(
             }
 
             if (result === "stop") return "break" as const
+            if (result === "timeout") {
+              // The turn stalled for over 600s (broken SSE stream / hung tool).
+              // Drop this turn without finalizing it and nudge the model to
+              // continue with the next turn.
+              yield* Effect.logInfo("turn timed out; inserting timeout prompt and continuing")
+              yield* createUserMessage({
+                sessionID,
+                parts: [{ type: "text", text: TURN_TIMEOUT_PROMPT }],
+              }).pipe(Effect.orDie)
+              return "continue" as const
+            }
             if (result === "compact") {
               yield* compaction.create({
                 sessionID,
