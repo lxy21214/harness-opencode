@@ -42,6 +42,9 @@ function wrapSSE(res: Response, ms: number, ctl: AbortController) {
   const reader = res.body.getReader()
   const body = new ReadableStream<Uint8Array>({
     async pull(ctrl) {
+      // Bun bug: reader.read() hangs forever when the connection closes
+      // without a proper stream end (oven-sh/bun#16682). Give each read a
+      // timeout so a broken SSE stream cannot stall the loop indefinitely.
       const part = await new Promise<Awaited<ReturnType<typeof reader.read>>>((resolve, reject) => {
         const id = setTimeout(() => {
           const err = new ProviderError.ResponseStreamError("SSE read timed out")
@@ -977,7 +980,16 @@ function custom(dep: CustomDep): Record<string, CustomLoader> {
             const decoder = new TextDecoder()
             const stream = new ReadableStream({
               async pull(ctrl) {
-                const { done, value } = await reader.read()
+                // Bun bug: reader.read() hangs forever when the connection closes
+                // without a proper stream end (oven-sh/bun#16682). Give each read a
+                // timeout so a broken SSE stream cannot stall the loop indefinitely.
+                const { done, value } = await new Promise<Awaited<ReturnType<typeof reader.read>>>((resolve, reject) => {
+                  const id = setTimeout(() => reject(new Error("SSE read timed out")), 300_000)
+                  reader.read().then(
+                    (part) => { clearTimeout(id); resolve(part) },
+                    (err) => { clearTimeout(id); reject(err) },
+                  )
+                })
                 if (done) {
                   ctrl.close()
                   return
